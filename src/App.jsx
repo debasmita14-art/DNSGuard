@@ -11,8 +11,7 @@ import {
   XAxis, YAxis
 } from 'recharts';
 
-const API = 'http://localhost:3001/api';
-
+const API = 'https://lowest-historical-robbie-capitol.trycloudflare.com/api';
 const TESTS = [
   {
     domain: 'secure.lab.test',
