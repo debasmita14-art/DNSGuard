@@ -1,72 +1,1349 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, ArrowUpRight, Bell, Check, CheckCircle2, ChevronDown, Clock3, Cpu, Download, ExternalLink, FileText, Fingerprint, Globe2, LayoutDashboard, LockKeyhole, Menu, Network, Radio, RefreshCw, Search, Server, Shield, ShieldAlert, ShieldCheck, Terminal, Wifi, X, Zap } from 'lucide-react';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-const TESTS=[{domain:'secure.lab.test',label:'Valid DNSSEC signatures',expected:'NOERROR + AD',result:'SECURE',detail:'Expected: validated answer with the Authenticated Data (AD) flag.'},{domain:'insecure.lab.test',label:'Unsigned zone',expected:'NOERROR, AD absent',result:'INSECURE',detail:'Expected: answer returned without AD; unsigned is not the same as bogus.'},{domain:'www.bogus.lab.test',label:'Broken DNSSEC chain',expected:'SERVFAIL',result:'BOGUS',detail:'Expected: validating resolver rejects the invalid DNSSEC response.'}];
-const INITIAL=[{id:1,domain:'secure.lab.test',type:'A',rcode:'NOERROR',ad:true,result:'SECURE',latency:24,time:'just now'},{id:2,domain:'insecure.lab.test',type:'A',rcode:'NOERROR',ad:false,result:'INSECURE',latency:31,time:'1 min ago'},{id:3,domain:'www.bogus.lab.test',type:'A',rcode:'SERVFAIL',ad:false,result:'BOGUS',latency:42,time:'2 min ago'},{id:4,domain:'secure.lab.test',type:'AAAA',rcode:'NOERROR',ad:true,result:'SECURE',latency:27,time:'4 min ago'},{id:5,domain:'insecure.lab.test',type:'A',rcode:'NOERROR',ad:false,result:'INSECURE',latency:29,time:'6 min ago'}];
-const TRAFFIC=[['09:00',12],['09:05',18],['09:10',14],['09:15',27],['09:20',22],['09:25',34],['09:30',28],['09:35',41],['09:40',32],['09:45',46],['09:50',38],['09:55',51]].map(([time,queries])=>({time,queries}));
-function Pill({children,kind='neutral'}){return <span className={`pill ${kind}`}><i/>{children}</span>}
-function Metric({icon:Icon,label,value,note,kind='teal'}){return <article className="metric"><div className="metric-top"><span className={`metric-icon ${kind}`}><Icon size={18}/></span><small>{note}</small></div><strong>{value}</strong><span>{label}</span></article>}
-function Head({eyebrow,title,subtitle,action}){return <div className="page-head"><div><label>{eyebrow}</label><h1>{title}</h1><p>{subtitle}</p></div>{action&&<div className="head-actions">{action}</div>}</div>}
-export default function App(){
- const [page,setPage]=useState('Overview'),[mobile,setMobile]=useState(false),[notice,setNotice]=useState(true),[queries,setQueries]=useState(INITIAL),[search,setSearch]=useState(''),[filter,setFilter]=useState('ALL'),[domain,setDomain]=useState(TESTS[0].domain),[testing,setTesting]=useState(false),[result,setResult]=useState(null),[refresh,setRefresh]=useState(0),[apiStatus,setApiStatus]=useState('checking');
- useEffect(()=>{
-  let active=true;
-  const loadBackend=async()=>{
-   try{
-    const [healthResponse,queriesResponse]=await Promise.all([fetch('http://localhost:3001/api/health'),fetch('http://localhost:3001/api/queries')]);
-    if(!healthResponse.ok||!queriesResponse.ok) throw new Error('Backend API returned an error');
-    const health=await healthResponse.json();
-    const payload=await queriesResponse.json();
-    if(!active) return;
-    setApiStatus(health.success?'connected':'error');
-    if(payload.success&&Array.isArray(payload.data)){
-     const mapped=payload.data.map((item,index)=>({id:index+1,domain:item.domain,type:'A',rcode:item.result==='BOGUS'?'SERVFAIL':item.result==='SECURE'||item.result==='INSECURE'?'NOERROR':(item.result||'UNKNOWN'),ad:Boolean(item.authenticated),result:item.status||item.result,latency:null,time:'API demo data'}));
-     setQueries(mapped);
-    }
-   }catch(error){if(active)setApiStatus('offline');}
-  };
-  loadBackend();
-  return ()=>{active=false;};
- },[]);
- const nav=[['Overview',LayoutDashboard],['DNSSEC Test Console',ShieldCheck],['Query Explorer',Search],['System Architecture',Network],['Event Logs',Terminal]];
- const filtered=useMemo(()=>queries.filter(q=>(filter==='ALL'||q.result===filter)&&`${q.domain} ${q.rcode} ${q.result}`.toLowerCase().includes(search.toLowerCase())),[queries,filter,search]);
- const runTest=async()=>{
-  setTesting(true);setResult(null);
-  const t=TESTS.find(x=>x.domain===domain);
-  try{
-   const response=await fetch('http://localhost:3001/api/dnssec/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain})});
-   const payload=await response.json();
-   if(!response.ok||!payload.success) throw new Error(payload.error||'Backend test failed');
-   const data=payload.data;
-   const q={id:Date.now(),domain:data.domain,type:'A',rcode:data.result==='BOGUS'?'SERVFAIL':'NOERROR',ad:Boolean(data.authenticated),result:data.status||data.result,latency:null,time:'just now'};
-   setResult({...t,result:q.result,ranAt:new Date().toLocaleTimeString(),apiMessage:payload.message||'Backend response',mode:payload.mode||'demo'});
-   setQueries(p=>[q,...p.filter(item=>item.domain!==q.domain)].slice(0,12));
-   setApiStatus('connected');
-  }catch(error){
-   setResult({...t,result:'ERROR',ranAt:new Date().toLocaleTimeString(),apiMessage:'Could not reach the backend. Make sure node server.js is running on port 3001.',mode:'offline'});
-   setApiStatus('offline');
-  }finally{setTesting(false);}
- };
- const exportCsv=()=>{const rows=[['Domain','Type','Response Code','AD Flag','Classification','Latency ms','Relative time'],...filtered.map(q=>[q.domain,q.type,q.rcode,q.ad,q.result,q.latency,q.time])];const blob=new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='dnsguard-demo-query-log.csv';a.click();URL.revokeObjectURL(url)};
- return <div className="shell">
- <aside className={`sidebar ${mobile?'open':''}`}><div className="brand"><div className="logo"><Shield size={23}/></div><div><b>DNS<span>GUARD</span></b><small>IOT SECURITY CONSOLE</small></div><button className="mobile-close" onClick={()=>setMobile(false)}><X/></button></div><label className="side-label">WORKSPACE</label><div className="workspace"><div>TC</div><span><b>Team TC200</b><small>AIORI-3 · PS-004</small></span><ChevronDown size={15}/></div><label className="side-label">MONITORING</label><nav>{nav.map(([name,Icon])=><button key={name} className={page===name?'active':''} onClick={()=>{setPage(name);setMobile(false)}}><Icon size={18}/>{name}{name==='Event Logs'&&<small>5</small>}</button>)}</nav><div className="side-bottom"><div className="gateway"><label><i/> API STATUS <b>{apiStatus==='connected'?'CONNECTED':apiStatus==='checking'?'CHECKING':'OFFLINE'}</b></label><strong>DNSGuard backend</strong><p><Server size={13}/> {apiStatus==='connected'?'Backend API reachable; resolver still not connected':apiStatus==='checking'?'Checking local backend API':'Backend API unavailable'}</p><div><span>DoT · TCP/853</span><Pill kind="warning">Not verified</Pill></div></div><div className="user"><div>TC</div><span><b>Team TC200</b><small>Project workspace</small></span></div></div></aside>
- {mobile&&<button className="scrim" onClick={()=>setMobile(false)} aria-label="Close navigation"/>}
- <main><header className="topbar"><div className="crumb"><button className="menu" onClick={()=>setMobile(true)}><Menu/></button>Workspace <span>/</span> <b>{page}</b></div><div className="top-right"><span className="demo-tag"><i/> DEMO DATA ONLY</span><button className="bell" onClick={()=>setNotice(v=>!v)}><Bell size={18}/></button><div className="avatar">TC</div></div></header>
- <div className="content">{notice&&<div className="banner"><AlertTriangle size={18}/><div><b>Simulation mode</b><span>Metrics, query history, and test outcomes are illustrative demo data. No live ESP8266 or gateway connection is configured.</span></div><button onClick={()=>setNotice(false)}><X size={16}/></button></div>}
- {page==='Overview'&&<>
- <Head eyebrow="SECURITY OVERVIEW" title={<>DNS Security <em>Overview</em></>} subtitle="Gateway-assisted DNSSEC validation for resource-constrained IoT devices." action={<><button className="btn secondary" onClick={()=>setRefresh(x=>x+1)}><RefreshCw size={15}/> Refresh demo</button><button className="btn primary" onClick={()=>setPage('DNSSEC Test Console')}><Zap size={15}/> Run DNSSEC test</button></>}/>
- <div className="status"><div className="status-icon"><Radio size={18}/></div><div><b>{apiStatus==='connected'?'Backend API connected':'Backend API '+(apiStatus==='checking'?'checking':'offline')}</b><span>{apiStatus==='connected'?'Dashboard is loading test cases from Express. DNS results are still simulated; Unbound is not connected.':'Dashboard is retaining its local sample data until the Express API is reachable.'}</span></div><Pill kind={apiStatus==='connected'?'teal':'warning'}>{apiStatus==='connected'?'API CONNECTED':'API NOT CONNECTED'}</Pill><small>Resolver pending</small></div>
- <div className="metrics"><Metric icon={Activity} label="DNS queries (demo)" value={128+refresh*3} note="Illustrative" kind="teal"/><Metric icon={ShieldCheck} label="Secure responses" value={76+queries.filter(q=>q.result==='SECURE').length-2} note="Illustrative" kind="green"/><Metric icon={ShieldAlert} label="Bogus rejected" value="14" note="Illustrative" kind="red"/><Metric icon={Clock3} label="Avg. response time" value="31 ms" note="Illustrative" kind="purple"/></div>
- <div className="grid chart-grid"><section className="panel"><div className="panel-head"><div><h3>DNS query activity</h3><p>Sample query volume · last 60 minutes</p></div><span className="legend"><i/> Queries</span></div><div className="chart-summary"><strong>51</strong><span>peak sample queries</span><small>DEMO SERIES</small></div><div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={TRAFFIC} margin={{top:8,right:5,left:-18,bottom:0}}><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2bdfba" stopOpacity={.24}/><stop offset="100%" stopColor="#2bdfba" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#20332d" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="time" tick={{fill:'#738a80',fontSize:10}} axisLine={false} tickLine={false} interval={2}/><YAxis tick={{fill:'#738a80',fontSize:10}} axisLine={false} tickLine={false}/><Tooltip contentStyle={{background:'#10201b',border:'1px solid #29433a',borderRadius:8,color:'#e4f3ed',fontSize:12}}/><Area type="monotone" dataKey="queries" stroke="#2bdfba" strokeWidth={2.5} fill="url(#fill)"/></AreaChart></ResponsiveContainer></div><div className="chart-foot"><span><i/> Sample query volume</span><span>Not live telemetry</span></div></section>
- <section className="panel validation"><div className="panel-head"><div><h3>DNSSEC validation</h3><p>Illustrative distribution</p></div><Pill>DEMO</Pill></div><div className="donut-wrap"><div className="donut"><div><strong>128</strong><span>sample queries</span></div></div></div><div className="legend-list"><div><i className="g"/>SECURE <b>76</b><small>59.4%</small></div><div><i className="a"/>INSECURE <b>38</b><small>29.7%</small></div><div><i className="r"/>BOGUS <b>14</b><small>10.9%</small></div></div><div className="validation-foot"><ShieldCheck size={15}/> Expected behavior for controlled test zones.</div></section></div>
- <section className="panel recent"><div className="panel-head"><div><h3>Recent DNS queries</h3><p>Sample records from the DNSSEC test zones</p></div><button className="text-btn" onClick={()=>setPage('Query Explorer')}>View all <ExternalLink size={13}/></button></div><QueryTable rows={queries.slice(0,4)}/><div className="table-foot"><span>Showing {Math.min(4,queries.length)} of {queries.length} demo records</span><button className="text-btn" onClick={()=>setPage('Query Explorer')}>Open query explorer <ArrowUpRight size={14}/></button></div></section>
- <div className="grid lower"><section className="panel"><div className="panel-head"><div><h3>Request path</h3><p>Intended gateway-assisted architecture</p></div><Pill kind="warning">Not live</Pill></div><div className="flow"><div><span className="node blue"><Cpu/></span><b>ESP8266</b><small>DNS client</small></div><i><small>DoT · 853</small><span/></i><div><span className="node teal"><LockKeyhole/></span><b>Gateway</b><small>Unbound</small></div><i><small>Recursive</small><span/></i><div><span className="node purple"><Server/></span><b>NSD zones</b><small>Test authority</small></div></div><div className="flow-foot"><LockKeyhole size={14}/> TLS protects transport; Unbound performs DNSSEC validation.</div></section><section className="panel"><div className="panel-head"><div><h3>Test zone status</h3><p>Expected outcomes from test design</p></div></div>{TESTS.map(t=><button className="zone-row" key={t.domain} onClick={()=>{setDomain(t.domain);setPage('DNSSEC Test Console')}}><span className={`zone-icon ${t.result.toLowerCase()}`}>{t.result==='SECURE'?<ShieldCheck/>:t.result==='BOGUS'?<ShieldAlert/>:<Shield/>}</span><span><b>{t.domain}</b><small>{t.expected}</small></span><Pill kind={t.result.toLowerCase()}>{t.result}</Pill><ArrowUpRight size={14}/></button>)}</section></div>
- </>}
- {page==='DNSSEC Test Console'&&<><Head eyebrow="VALIDATION WORKBENCH" title={<>DNSSEC <em>Test Console</em></>} subtitle="Run illustrative checks against controlled test-zone scenarios." action={<Pill kind="warning">Simulated test runner</Pill>}/><div className="notice"><AlertTriangle/><div><b>Backend demo runner — no DNS query is sent</b><p>This console sends a request to your local Express API. The API returns predefined demo outcomes; it does not contact Unbound, NSD, or the ESP8266.</p></div></div><div className="grid test-grid"><section className="panel test-form"><div className="panel-head"><div><h3>Configure test</h3><p>Select a DNSSEC scenario</p></div><small>STEP 01</small></div><label className="field-label" htmlFor="domain">TEST DOMAIN</label><div className="select"><Globe2 size={16}/><select id="domain" value={domain} onChange={e=>setDomain(e.target.value)}>{TESTS.map(t=><option key={t.domain}>{t.domain}</option>)}</select><ChevronDown size={15}/></div><div className="scenario"><div className={`scenario-icon ${TESTS.find(t=>t.domain===domain).result.toLowerCase()}`}>{domain.includes('bogus')?<ShieldAlert/>:domain.includes('insecure')?<Shield/>:<ShieldCheck/>}</div><div><small>SCENARIO</small><h4>{TESTS.find(t=>t.domain===domain).label}</h4><p>{TESTS.find(t=>t.domain===domain).detail}</p></div></div><div className="expected"><small>EXPECTED RESPONSE</small><b>{TESTS.find(t=>t.domain===domain).expected}</b><span>Classification: <strong>{TESTS.find(t=>t.domain===domain).result}</strong></span></div><button className="btn primary run" disabled={testing} onClick={runTest}>{testing?<RefreshCw className="spin"/>:<Zap size={16}/>} {testing?'Calling backend...':'Run backend demo test'}</button><p className="muted center"><LockKeyhole size={13}/> Calls the local API only; no live DNS query is sent.</p></section><section className="panel result-panel"><div className="panel-head"><div><h3>Test result</h3><p>Illustrative resolver response</p></div><small>STEP 02</small></div>{!result?<div className="empty"><div><Terminal size={28}/></div><h3>Ready to test</h3><p>Choose a scenario and run the simulated test to see its expected DNSSEC outcome.</p><small>● Waiting for user action</small></div>:<div className="result"><div className={`result-hero ${result.result.toLowerCase()}`}><div>{result.result==='SECURE'?<ShieldCheck/>:result.result==='BOGUS'?<ShieldAlert/>:<Shield/>}</div><span><small>{result.mode==='offline'?'BACKEND ERROR':'BACKEND DEMO OUTCOME'}</small><strong>{result.result}</strong><p>{result.result==='SECURE'?'Validated response expected':result.result==='BOGUS'?'Invalid DNSSEC response rejected':'Unsigned response expected'}</p></span><Pill kind="warning">Demo</Pill></div><div className="result-details"><span>Domain<b>{result.domain}</b></span><span>DNS response code<b>{result.result==='BOGUS'?'SERVFAIL':'NOERROR'}</b></span><span>AD flag<b>{result.result==='SECURE'?'Present (expected)':'Absent (expected)'}</b></span><span>Run time<b>{result.ranAt}</b></span></div><div className="warning-line"><AlertTriangle size={15}/> {result.apiMessage||'Expected result shown for demonstration.'} Not live DNSSEC validation.</div></div>}</section></div><section className="panel matrix"><div className="panel-head"><div><h3>Test matrix</h3><p>Project scenarios and expected resolver behavior</p></div></div><div className="table-scroll"><table><thead><tr><th>SCENARIO</th><th>TEST DOMAIN</th><th>EXPECTED RCODE</th><th>AD FLAG</th><th>CLASSIFICATION</th></tr></thead><tbody>{TESTS.map(t=><tr key={t.domain}><td>{t.label}</td><td><code>{t.domain}</code></td><td>{t.result==='BOGUS'?'SERVFAIL':'NOERROR'}</td><td>{t.result==='SECURE'?'Present':'Absent'}</td><td><Pill kind={t.result.toLowerCase()}>{t.result}</Pill></td></tr>)}</tbody></table></div></section></>}
- {page==='Query Explorer'&&<><Head eyebrow="QUERY INSPECTION" title={<>Query <em>Explorer</em></>} subtitle="Inspect sample DNS answers and DNSSEC classification details." action={<button className="btn secondary" onClick={exportCsv}><Download size={15}/> Export CSV</button>}/><div className="metrics compact"><Metric icon={Search} label="Displayed records" value={filtered.length} note="Filtered demo"/><Metric icon={ShieldCheck} label="Secure records" value={filtered.filter(q=>q.result==='SECURE').length} note="AD present" kind="green"/><Metric icon={AlertTriangle} label="Bogus records" value={filtered.filter(q=>q.result==='BOGUS').length} note="SERVFAIL expected" kind="red"/><Metric icon={Clock3} label="Mean sample latency" value={`${filtered.filter(q=>q.latency!=null).length?Math.round(filtered.filter(q=>q.latency!=null).reduce((s,q)=>s+q.latency,0)/filtered.filter(q=>q.latency!=null).length)+' ms':'—'}`} note="Illustrative" kind="purple"/></div><section className="panel explorer"><div className="toolbar"><div className="search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search domain, response code..."/><button onClick={()=>setSearch('')}><X size={14}/></button></div><div className="filters">{['ALL','SECURE','INSECURE','BOGUS'].map(f=><button className={filter===f?'selected':''} onClick={()=>setFilter(f)} key={f}>{f}</button>)}</div></div><QueryTable rows={filtered} full/><div className="table-foot"><span>Showing {filtered.length} matching demo records</span><span>Data is local to this browser session</span></div></section><div className="notice"><ShieldCheck/><div><b>About the AD flag</b><p>The Authenticated Data (AD) flag indicates that the validating resolver considers the answer authenticated. These rows are fixtures, not live resolver output.</p></div></div></>}
- {page==='System Architecture'&&<><Head eyebrow="SYSTEM DESIGN" title={<>System <em>Architecture</em></>} subtitle="Reference flow for the gateway-assisted DNSSEC project." action={<Pill kind="warning">Integration pending</Pill>}/><div className="notice"><Network/><div><b>Architecture view, not live network discovery</b><p>This diagram represents the intended design. It does not indicate that components are currently connected or reachable.</p></div></div><section className="panel architecture"><div className="panel-head"><div><h3>Resolution and validation path</h3><p>Conceptual system flow · PS-004</p></div><Pill>REFERENCE</Pill></div><div className="architecture-flow">{[{n:'01',name:'ESP8266 client',icon:Cpu,desc:'Builds DNS queries and requests resolution over DNS-over-TLS.'},{n:'02',name:'TLS transport',icon:LockKeyhole,desc:'DoT uses TLS over TCP port 853 to protect client-to-gateway DNS transport.'},{n:'03',name:'Unbound resolver',icon:Server,desc:'Performs recursive DNS resolution and DNSSEC validation.'},{n:'04',name:'NSD test zones',icon:Globe2,desc:'Hosts controlled SECURE, INSECURE, and BOGUS zones; NSD is authoritative, not the gateway.'}].map((s,i)=><React.Fragment key={s.n}><article><div className={`arch-icon c${i}`}><s.icon size={25}/></div><small>COMPONENT {s.n}</small><h3>{s.name}</h3><p>{s.desc}</p></article>{i<3&&<div className="arrow"><small>{['DNS over TLS · 853','Recursive query','DNSSEC validation'][i]}</small><b>→</b></div>}</React.Fragment>)}</div><div className="arch-foot"><span>— Intended data path</span><span>Connection status not verified</span></div></section><div className="grid lower"><section className="panel text-panel"><div className="panel-head"><div><h3>Security boundaries</h3><p>Layer responsibilities</p></div><Fingerprint/></div><div className="bullet"><LockKeyhole/><span><b>Transport confidentiality</b><small>TLS protects DNS traffic in transit between the client and gateway.</small></span></div><div className="bullet"><Fingerprint/><span><b>Gateway authentication</b><small>Public-key pinning and HMAC challenge-response are described design elements; runtime success is not asserted.</small></span></div><div className="bullet"><ShieldCheck/><span><b>DNSSEC validation</b><small>Unbound distinguishes secure, insecure, and bogus responses.</small></span></div></section><section className="panel text-panel"><div className="panel-head"><div><h3>Integration checklist</h3><p>Before showing live data</p></div></div>{['Expose a backend endpoint for resolver health and query events.','Forward actual client/resolver results to the backend.','Replace demo fixtures with validated API responses.','Show explicit offline states when the gateway is unreachable.'].map(t=><div className="check-row" key={t}><i/>{t}</div>)}</section></div></>}
- {page==='Event Logs'&&<><Head eyebrow="AUDIT TRAIL" title={<>Event <em>Logs</em></>} subtitle="Local demo events and sample DNSSEC outcomes." action={<Pill kind="warning">Sample events</Pill>}/><div className="notice"><AlertTriangle/><div><b>These are not device logs</b><p>Events below are generated for this UI demo and are not retrieved from the ESP8266, Unbound, NSD, or system journal.</p></div></div><section className="panel logs"><div className="panel-head"><div><h3>Event timeline</h3><p>Illustrative entries</p></div><Pill>LOCAL DEMO</Pill></div>{[{level:'INFO',title:'Demo environment initialized',desc:'Local sample data loaded in the browser. No gateway session was started.',time:'09:55:21'},{level:'WARN',title:'Gateway connection not configured',desc:'No backend endpoint is configured for live Unbound resolver status.',time:'09:54:02'},...queries.slice(0,5).map((q,i)=>({level:q.result==='BOGUS'?'WARN':'INFO',title:`Sample query · ${q.domain}`,desc:`Illustrative response ${q.rcode}; AD flag ${q.ad?'present':'absent'}; expected classification ${q.result}.`,time:['09:53:40','09:52:18','09:51:03','09:49:42','09:48:19'][i]}))].map((e,i)=><div className="event" key={i}><div className={e.level==='WARN'?'warn':''}>{e.level==='WARN'?<AlertTriangle/>:<FileText/>}</div><span><b>{e.title}</b><p>{e.desc}</p><small><Clock3 size={12}/> {e.time} · DEMO TIMESTAMP</small></span><Pill kind={e.level==='WARN'?'warning':'teal'}>{e.level}</Pill></div>)}</section></>}
- <footer><span>DNSGuard <b>v0.1.0</b> · AIORI-3 / PS-004</span><span><i/> Demo environment · Gateway integration pending</span></footer></div></main></div>;
+import {
+  Activity, AlertTriangle, ArrowUpRight, Bell, Check, CheckCircle2,
+  ChevronDown, Clock3, Cpu, Download, ExternalLink, FileText,
+  Fingerprint, Globe2, LayoutDashboard, LockKeyhole, Menu, Network,
+  Radio, RefreshCw, Search, Server, Shield, ShieldAlert, ShieldCheck,
+  Terminal, Wifi, X, Zap
+} from 'lucide-react';
+import {
+  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip,
+  XAxis, YAxis
+} from 'recharts';
+
+const API = 'http://localhost:3001/api';
+
+const TESTS = [
+  {
+    domain: 'secure.lab.test',
+    label: 'Valid DNSSEC signatures',
+    expected: 'NOERROR + AD',
+    result: 'SECURE',
+    detail: 'Expected: validated answer with the Authenticated Data (AD) flag.'
+  },
+  {
+    domain: 'insecure.lab.test',
+    label: 'Unsigned zone',
+    expected: 'NOERROR, AD absent',
+    result: 'INSECURE',
+    detail: 'Expected: answer returned without AD; unsigned is not the same as bogus.'
+  },
+  {
+    domain: 'www.bogus.lab.test',
+    label: 'Broken DNSSEC chain',
+    expected: 'SERVFAIL',
+    result: 'BOGUS',
+    detail: 'Expected: validating resolver rejects the invalid DNSSEC response.'
+  }
+];
+
+const INITIAL = [
+  {
+    id: 1, domain: 'secure.lab.test', type: 'A',
+    rcode: 'NOERROR', ad: true, result: 'SECURE',
+    latency: null, time: 'Waiting for backend'
+  },
+  {
+    id: 2, domain: 'insecure.lab.test', type: 'A',
+    rcode: 'NOERROR', ad: false, result: 'INSECURE',
+    latency: null, time: 'Waiting for backend'
+  },
+  {
+    id: 3, domain: 'www.bogus.lab.test', type: 'A',
+    rcode: 'SERVFAIL', ad: false, result: 'BOGUS',
+    latency: null, time: 'Waiting for backend'
+  }
+];
+
+const TRAFFIC = [
+  ['09:00', 12], ['09:05', 18], ['09:10', 14],
+  ['09:15', 27], ['09:20', 22], ['09:25', 34],
+  ['09:30', 28], ['09:35', 41], ['09:40', 32],
+  ['09:45', 46], ['09:50', 38], ['09:55', 51]
+].map(([time, queries]) => ({ time, queries }));
+
+function Pill({ children, kind = 'neutral' }) {
+  return (
+    <span className={`pill ${kind}`}>
+      <i />
+      {children}
+    </span>
+  );
 }
 
-function QueryTable({rows,full=false}){return <div className="table-scroll"><table><thead><tr><th>DOMAIN</th>{full&&<th>TYPE</th>}<th>RESPONSE</th><th>AD FLAG</th><th>CLASSIFICATION</th><th>LATENCY</th><th>TIME</th></tr></thead><tbody>{rows.map(q=><tr key={q.id}><td><span className="domain"><Globe2 size={14}/><b>{q.domain}</b></span></td>{full&&<td><code>{q.type}</code></td>}<td><code className={q.rcode==='SERVFAIL'?'fail':''}>{q.rcode}</code></td><td><span className={`ad ${q.ad?'yes':'no'}`}>{q.ad?<Check size={12}/>:<X size={12}/>} {q.ad?'Present':'Absent'}</span></td><td><Pill kind={q.result.toLowerCase()}>{q.result}</Pill></td><td>{q.latency==null?'—':`${q.latency} ms`}</td><td className="time">{q.time}</td></tr>)}</tbody></table>{!rows.length&&<div className="no-results">No records match these filters.</div>}</div>}
+function Metric({ icon: Icon, label, value, note, kind = 'teal' }) {
+  return (
+    <article className="metric">
+      <div className="metric-top">
+        <span className={`metric-icon ${kind}`}>
+          <Icon size={18} />
+        </span>
+        <small>{note}</small>
+      </div>
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </article>
+  );
+}
+
+function Head({ eyebrow, title, subtitle, action }) {
+  return (
+    <div className="page-head">
+      <div>
+        <label>{eyebrow}</label>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      {action && <div className="head-actions">{action}</div>}
+    </div>
+  );
+}
+
+function mapQuery(item, index = 0) {
+  return {
+    id: `${item.domain}-${item.checkedAt || index}`,
+    domain: item.domain,
+    type: item.type || 'A',
+    rcode: item.result || 'UNKNOWN',
+    ad: Boolean(item.authenticated),
+    result: item.status || 'UNKNOWN',
+    latency: Number.isFinite(item.queryTimeMs)
+      ? item.queryTimeMs
+      : null,
+    answer: item.answer || null,
+    source: item.source || 'Unknown',
+    checkedAt: item.checkedAt || null,
+    time: item.checkedAt
+      ? new Date(item.checkedAt).toLocaleTimeString()
+      : 'Just checked'
+  };
+}
+
+export default function App() {
+  const [page, setPage] = useState('Overview');
+  const [mobile, setMobile] = useState(false);
+  const [notice, setNotice] = useState(true);
+  const [queries, setQueries] = useState(INITIAL);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('ALL');
+  const [domain, setDomain] = useState(TESTS[0].domain);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [refresh, setRefresh] = useState(0);
+  const [apiStatus, setApiStatus] = useState('checking');
+  const [resolverConnected, setResolverConnected] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const selectedTest = TESTS.find(t => t.domain === domain);
+
+  // Load live DNSSEC query results from the Express backend.
+  useEffect(() => {
+    let active = true;
+
+    const loadBackend = async () => {
+      try {
+        const [healthResponse, queriesResponse] = await Promise.all([
+          fetch(`${API}/health`),
+          fetch(`${API}/queries`)
+        ]);
+
+        if (!healthResponse.ok || !queriesResponse.ok) {
+          throw new Error('Backend API returned an error');
+        }
+
+        const health = await healthResponse.json();
+        const payload = await queriesResponse.json();
+
+        if (!active) return;
+
+        if (!health.success || !payload.success) {
+          throw new Error('Backend or resolver check failed');
+        }
+
+        setApiStatus('connected');
+        setResolverConnected(Boolean(health.resolverConnected));
+
+        if (Array.isArray(payload.data)) {
+          const mapped = payload.data.map((item, index) =>
+            mapQuery(item, index)
+          );
+
+          setQueries(mapped);
+          setLastUpdated(new Date());
+        }
+      } catch (error) {
+        if (active) {
+          setApiStatus('offline');
+          setResolverConnected(false);
+        }
+      }
+    };
+
+       loadBackend();
+
+    const timer = setInterval(loadBackend, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [refresh]);
+
+  const nav = [
+    ['Overview', LayoutDashboard],
+    ['DNSSEC Test Console', ShieldCheck],
+    ['Query Explorer', Search],
+    ['System Architecture', Network],
+    ['Event Logs', Terminal]
+  ];
+
+  const filtered = useMemo(
+    () =>
+      queries.filter(
+        q =>
+          (filter === 'ALL' || q.result === filter) &&
+          `${q.domain} ${q.rcode} ${q.result} ${q.answer || ''}`
+            .toLowerCase()
+            .includes(search.toLowerCase())
+      ),
+    [queries, filter, search]
+  );
+
+  const runTest = async () => {
+    setTesting(true);
+    setResult(null);
+
+    const selectedTest = TESTS.find(t => t.domain === domain);
+
+    try {
+      console.log("DNSGuard test request:", `${API}/dnssec/test`, domain);
+      const response = await fetch(`${API}/dnssec/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain })
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || 'Backend test failed');
+      }
+
+      const data = payload.data;
+      const q = mapQuery(data, Date.now());
+
+      setResult({
+        ...selectedTest,
+        ...q,
+        result: data.status || 'UNKNOWN',
+        ranAt: new Date().toLocaleTimeString(),
+        apiMessage: payload.message || 'Backend response received.',
+        mode: payload.mode || 'unknown'
+      });
+
+      setQueries(previous =>
+        [q, ...previous.filter(item => item.domain !== q.domain)].slice(0, 12)
+      );
+
+      setApiStatus('connected');
+      setResolverConnected(true);
+      setLastUpdated(new Date());
+    } catch (error) {
+      setResult({
+        ...selectedTest,
+        result: 'ERROR',
+        ranAt: new Date().toLocaleTimeString(),
+        apiMessage: error.message ||
+          'Could not reach the backend. Check that node server.js is running on port 3001.',
+        mode: 'offline'
+      });
+
+      setApiStatus('offline');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const exportCsv = () => {
+    const rows = [
+      [
+        'Domain', 'Type', 'Response Code', 'AD Flag',
+        'Classification', 'Latency ms', 'Answer', 'Source', 'Checked At'
+      ],
+      ...filtered.map(q => [
+        q.domain,
+        q.type,
+        q.rcode,
+        q.ad,
+        q.result,
+        q.latency ?? '',
+        q.answer || '',
+        q.source || '',
+        q.checkedAt || ''
+      ])
+    ];
+
+    const escapeCsv = value => {
+      const text = String(value ?? '');
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+
+    const csv = rows.map(row => row.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+
+    a.href = url;
+    a.download = 'dnsguard-query-log.csv';
+    a.click();
+
+    URL.revokeObjectURL(url);
+  };
+
+  const secureCount = queries.filter(q => q.result === 'SECURE').length;
+  const insecureCount = queries.filter(q => q.result === 'INSECURE').length;
+  const bogusCount = queries.filter(q => q.result === 'BOGUS').length;
+
+  const latencies = queries
+    .filter(q => q.latency != null)
+    .map(q => q.latency);
+
+  const averageLatency = latencies.length
+    ? `${Math.round(
+        latencies.reduce((sum, latency) => sum + latency, 0) /
+        latencies.length
+      )} ms`
+    : '—';
+
+  return (
+    <div className="shell">
+      <aside className={`sidebar ${mobile ? 'open' : ''}`}>
+        <div className="brand">
+          <div className="logo"><Shield size={23} /></div>
+          <div>
+            <b>DNS<span>GUARD</span></b>
+            <small>IOT SECURITY CONSOLE</small>
+          </div>
+          <button
+            className="mobile-close"
+            onClick={() => setMobile(false)}
+          >
+            <X />
+          </button>
+        </div>
+
+        <label className="side-label">WORKSPACE</label>
+        <div className="workspace">
+          <div>TC</div>
+          <span>
+            <b>Team TC200</b>
+            <small>AIORI-3 · PS-004</small>
+          </span>
+          <ChevronDown size={15} />
+        </div>
+
+        <label className="side-label">MONITORING</label>
+        <nav>
+          {nav.map(([name, Icon]) => (
+            <button
+              key={name}
+              className={page === name ? 'active' : ''}
+              onClick={() => {
+                setPage(name);
+                setMobile(false);
+              }}
+            >
+              <Icon size={18} />
+              {name}
+              {name === 'Event Logs' && <small>5</small>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="side-bottom">
+          <div className="gateway">
+            <label>
+              <i /> API STATUS
+              <b>
+                {apiStatus === 'connected'
+                  ? 'CONNECTED'
+                  : apiStatus === 'checking'
+                    ? 'CHECKING'
+                    : 'OFFLINE'}
+              </b>
+            </label>
+            <strong>DNSGuard backend</strong>
+            <p>
+              <Server size={13} />
+              {apiStatus === 'connected'
+                ? resolverConnected
+                  ? 'Backend and resolver reachable'
+                  : 'Backend reachable; resolver pending'
+                : apiStatus === 'checking'
+                  ? 'Checking local backend API'
+                  : 'Backend API unavailable'}
+            </p>
+            <div>
+              <span>DoT · TCP/853</span>
+            </div>
+          </div>
+
+          <div className="user">
+            <div>TC</div>
+            <span>
+              <b>Team TC200</b>
+              <small>Project workspace</small>
+            </span>
+          </div>
+        </div>
+      </aside>
+
+      {mobile && (
+        <button
+          className="scrim"
+          onClick={() => setMobile(false)}
+          aria-label="Close navigation"
+        />
+      )}
+
+      <main>
+        <header className="topbar">
+          <div className="crumb">
+            <button className="menu" onClick={() => setMobile(true)}>
+              <Menu />
+            </button>
+            Workspace <span>/</span> <b>{page}</b>
+          </div>
+
+          <div className="top-right">
+            <span className="demo-tag">
+              <i /> {apiStatus === 'connected' ? 'LIVE API DATA' : 'API OFFLINE'}
+            </span>
+            <button className="bell" onClick={() => setNotice(v => !v)}>
+              <Bell size={18} />
+            </button>
+            <div className="avatar">TC</div>
+ 
+        </div>
+      </header>
+
+      <div className="content">
+        {page === 'Overview' && (
+          <>
+            <Head
+              eyebrow="SECURITY OVERVIEW"
+              title={<>DNS Security <em>Overview</em></>}
+              subtitle="Gateway-assisted DNSSEC validation for resource-constrained IoT devices."
+              action={
+
+                  <>
+                    <button
+                      className="btn secondary"
+                      onClick={() => setRefresh(x => x + 1)}
+                    >
+                      <RefreshCw size={15} /> Refresh live data
+                    </button>
+                    <button
+                      className="btn primary"
+                      onClick={() => setPage('DNSSEC Test Console')}
+                    >
+                      <Zap size={15} /> Run DNSSEC test
+                    </button>
+                  </>
+                }
+              />
+
+              <div className="status">
+                <div className="status-icon"><Radio size={18} /></div>
+                <div>
+                  <b>
+                    {apiStatus === 'connected'
+                      ? 'Backend API connected'
+                      : apiStatus === 'checking'
+                        ? 'Checking backend API'
+                        : 'Backend API offline'}
+                  </b>
+                  <span>
+                    {apiStatus === 'connected'
+                      ? resolverConnected
+                        ? 'Live resolver results received through Express and Unbound.'
+                        : 'Express is reachable, but resolver connectivity has not been confirmed.'
+                      : 'The dashboard could not retrieve live results from the backend.'}
+                  </span>
+                </div>
+                <Pill kind={apiStatus === 'connected' ? 'teal' : 'warning'}>
+                  {apiStatus === 'connected' ? 'API CONNECTED' : 'API UNAVAILABLE'}
+                </Pill>
+                <small>
+                  {resolverConnected ? 'Resolver connected' : 'Resolver pending'}
+                </small>
+              </div>
+
+              <div className="metrics">
+                <Metric
+                  icon={Activity}
+                  label="Loaded DNS queries"
+                  value={queries.length}
+                  note="API records"
+                  kind="teal"
+                />
+                <Metric
+                  icon={ShieldCheck}
+                  label="Secure responses"
+                  value={secureCount}
+                  note="AD authenticated"
+                  kind="green"
+                />
+                <Metric
+                  icon={ShieldAlert}
+                  label="Bogus responses"
+                  value={bogusCount}
+                  note="SERVFAIL expected"
+                  kind="red"
+                />
+                <Metric
+                  icon={Clock3}
+                  label="Average query time"
+                  value={averageLatency}
+                  note="Measured latency"
+                  kind="purple"
+                />
+              </div>
+
+              <div className="grid chart-grid">
+                <section className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>DNS query activity</h3>
+                      <p>Illustrative query volume · not live telemetry</p>
+                    </div>
+                    <span className="legend"><i /> Sample queries</span>
+                  </div>
+                  <div className="chart-summary">
+                    <strong>{TRAFFIC.reduce((max, item) => Math.max(max, item.queries), 0)}</strong>
+                    <span>peak sample queries</span>
+                    <small>ILLUSTRATIVE SERIES</small>
+                  </div>
+                  <div className="chart">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={TRAFFIC}
+                        margin={{ top: 8, right: 5, left: -18, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#2bdfba" stopOpacity={0.24} />
+                            <stop offset="100%" stopColor="#2bdfba" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid stroke="#20332d" strokeDasharray="3 5" vertical={false} />
+                        <XAxis
+                          dataKey="time"
+                          tick={{ fill: '#738a80', fontSize: 10 }}
+                          axisLine={false}
+                          tickLine={false}
+                          interval={2}
+                        />
+                        <YAxis
+                          tick={{ fill: '#738a80', fontSize: 10 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            background: '#10201b',
+                            border: '1px solid #29433a',
+                            borderRadius: 8,
+                            color: '#e4f3ed',
+                            fontSize: 12
+                          }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="queries"
+                          stroke="#2bdfba"
+                          strokeWidth={2.5}
+                          fill="url(#fill)"
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="chart-foot">
+                    <span><i /> Sample query volume</span>
+                    <span>Not live telemetry</span>
+                  </div>
+                </section>
+
+                <section className="panel validation">
+                  <div className="panel-head">
+                    <div>
+                      <h3>DNSSEC validation</h3>
+                      <p>Current API query distribution</p>
+                    </div>
+                    <Pill>API DATA</Pill>
+                  </div>
+                  <div className="donut-wrap">
+                    <div className="donut">
+                      <div>
+                        <strong>{queries.length}</strong>
+                        <span>loaded queries</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="legend-list">
+                    <div>
+                      <i className="g" />SECURE
+                      <b>{secureCount}</b>
+                      <small>
+                        {queries.length
+                          ? `${(secureCount / queries.length * 100).toFixed(1)}%`
+                          : '—'}
+                      </small>
+                    </div>
+                    <div>
+                      <i className="a" />INSECURE
+                      <b>{insecureCount}</b>
+                      <small>
+                        {queries.length
+                          ? `${(insecureCount / queries.length * 100).toFixed(1)}%`
+                          : '—'}
+                      </small>
+                    </div>
+                    <div>
+                      <i className="r" />BOGUS
+                      <b>{bogusCount}</b>
+                      <small>
+                        {queries.length
+                          ? `${(bogusCount / queries.length * 100).toFixed(1)}%`
+                          : '—'}
+                      </small>
+                    </div>
+                  </div>
+                  <div className="validation-foot">
+                    <ShieldCheck size={15} />
+                    Classification from resolver API responses.
+                  </div>
+                </section>
+              </div>
+
+              <section className="panel recent">
+                <div className="panel-head">
+                  <div>
+                    <h3>Recent DNS queries</h3>
+                    <p>Records returned by the DNSGuard backend</p>
+                  </div>
+                  <button className="text-btn" onClick={() => setPage('Query Explorer')}>
+                    View all <ExternalLink size={13} />
+                  </button>
+                </div>
+                <QueryTable rows={queries.slice(0, 4)} />
+                <div className="table-foot">
+                  <span>Showing {Math.min(4, queries.length)} of {queries.length} API records</span>
+                  <button className="text-btn" onClick={() => setPage('Query Explorer')}>
+                    Open query explorer <ArrowUpRight size={14} />
+                  </button>
+                </div>
+              </section>
+
+              <div className="grid lower">
+                <section className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Request path</h3>
+                      <p>Intended gateway-assisted architecture</p>
+                    </div>
+                    <Pill kind="warning">Not verified</Pill>
+                  </div>
+                  <div className="flow">
+                    <div>
+                      <span className="node blue"><Cpu /></span>
+                      <b>ESP8266</b>
+                      <small>DNS client</small>
+                    </div>
+                    <i><small>DoT · 853</small><span /></i>
+                    <div>
+                      <span className="node teal"><LockKeyhole /></span>
+                      <b>Gateway</b>
+                      <small>Unbound</small>
+                    </div>
+                    <i><small>Recursive</small><span /></i>
+                    <div>
+                      <span className="node purple"><Server /></span>
+                      <b>NSD zones</b>
+                      <small>Test authority</small>
+                    </div>
+                  </div>
+                  <div className="flow-foot">
+                    <LockKeyhole size={14} />
+                    TLS protects transport; Unbound performs DNSSEC validation.
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Test zone status</h3>
+                      <p>Controlled DNSSEC test scenarios</p>
+                    </div>
+                  </div>
+                  {TESTS.map(t => (
+                    <button
+                      className="zone-row"
+                      key={t.domain}
+                      onClick={() => {
+                        setDomain(t.domain);
+                        setPage('DNSSEC Test Console');
+                      }}
+                    >
+                      <span className={`zone-icon ${t.result.toLowerCase()}`}>
+                        {t.result === 'SECURE'
+                          ? <ShieldCheck />
+                          : t.result === 'BOGUS'
+                            ? <ShieldAlert />
+                            : <Shield />}
+                      </span>
+                      <span>
+                        <b>{t.domain}</b>
+                        <small>{t.expected}</small>
+                      </span>
+                      <Pill kind={t.result.toLowerCase()}>{t.result}</Pill>
+                      <ArrowUpRight size={14} />
+                    </button>
+                  ))}
+                </section>
+              </div>
+            </>
+          )}
+
+          {page === 'DNSSEC Test Console' && (
+            <>
+              <Head
+                eyebrow="VALIDATION WORKBENCH"
+                title={<>DNSSEC <em>Test Console</em></>}
+                subtitle="Run real resolver checks against controlled DNSSEC test zones."
+              />
+
+              <div className="notice">
+                <AlertTriangle />
+                <div>
+                  <b>Live resolver test through Express</b>
+                  <p>
+                    This console sends the selected domain to your local Express
+                    API, which runs a DNS query through Unbound. This verifies the
+                    backend-to-resolver path, not the ESP8266 DNS-over-TLS path.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid test-grid">
+                <section className="panel test-form">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Configure test</h3>
+                      <p>Select a DNSSEC scenario</p>
+                    </div>
+                    <small>STEP 01</small>
+                  </div>
+
+                  
+
+<label className="field-label" htmlFor="domain">
+  TEST DOMAIN
+</label>
+
+<div className="select">
+  <Globe2 size={16} />
+
+  <input
+    id="domain"
+    type="text"
+    value={domain}
+    onChange={e => setDomain(e.target.value)}
+    onKeyDown={e => {
+      if (e.key === 'Enter' && !testing) runTest();
+    }}
+    placeholder="Enter a domain, e.g. iem.edu.in"
+    autoComplete="off"
+    spellCheck={false}
+    aria-label="Domain name to test"
+  />
+</div>
+
+<div className="preset-domains">
+  <small>QUICK TESTS</small>
+  {TESTS.map(t => (
+    <button
+      type="button"
+      key={t.domain}
+      className={domain === t.domain ? 'selected' : ''}
+      onClick={() => {
+        setDomain(t.domain);
+        setResult(null);
+      }}
+    >
+      {t.domain}
+    </button>
+  ))}
+
+</div>
+
+<div className="scenario">
+  <div
+    className={`scenario-icon ${
+      selectedTest
+        ? selectedTest.result.toLowerCase()
+        : 'neutral'
+    }`}
+  >
+
+  >
+    {selectedTest?.result === 'BOGUS'
+      ? <ShieldAlert />
+      : selectedTest?.result === 'SECURE'
+        ? <ShieldCheck />
+        : <Shield />}
+  </div>
+
+  <div>
+    <small>TEST TYPE</small>
+    <h4>
+      {selectedTest
+        ? selectedTest.label
+        : 'Custom domain validation'}
+    </h4>
+    <p>
+      {selectedTest
+        ? selectedTest.detail
+        : 'Query the live resolver and inspect its response code, AD flag, answer, and classification.'}
+    </p>
+  </div>
+</div>                 
+<div className="expected">
+  <small>
+    {selectedTest ? 'EXPECTED RESPONSE' : 'LIVE RESULT'}
+  </small>
+  <b>
+    {selectedTest
+      ? selectedTest.expected
+      : 'Determined by the resolver'}
+  </b>
+
+  <span>
+    {selectedTest
+      ? 'Expected classification:'
+      : 'Classification:'}{' '}
+    <strong>
+      {selectedTest
+        ? selectedTest.result
+        : result?.domain === domain
+          ? result.result
+          : 'Pending test'}
+    </strong>
+  </span>
+</div>
+
+                  <button
+                    className="btn primary run"
+                    disabled={testing}
+                    onClick={runTest}
+                  >
+                    {testing
+                      ? <RefreshCw className="spin" />
+                      : <Zap size={16} />}
+                    {testing ? 'Querying Unbound...' : 'Run live DNSSEC test'}
+                  </button>
+
+                  <p className="muted center">
+                    <LockKeyhole size={13} />
+                    Sends a request to the local Express backend.
+                  </p>
+                </section>
+
+                <section className="panel result-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Test result</h3>
+                      <p>Resolver response</p>
+                    </div>
+                    <small>STEP 02</small>
+                  </div>
+
+                  {!result ? (
+                    <div className="empty">
+                      <div><Terminal size={28} /></div>
+                      <h3>Ready to test</h3>
+                      <p>
+                        Choose a scenario and run a live resolver query to inspect
+                        the returned DNSSEC classification.
+                      </p>
+                      <small>● Waiting for user action</small>
+                    </div>
+                  ) : (
+                    <div className="result">
+                      <div className={`result-hero ${result.result.toLowerCase()}`}>
+                        <div>
+                          {result.result === 'SECURE'
+                            ? <ShieldCheck />
+                            : result.result === 'BOGUS'
+                              ? <ShieldAlert />
+                              : result.result === 'ERROR'
+                                ? <AlertTriangle />
+                                : <Shield />}
+                        </div>
+                        <span>
+                          <small>
+                            {result.mode === 'offline'
+                              ? 'BACKEND ERROR'
+                              : 'LIVE API RESULT'}
+                          </small>
+                          <strong>{result.result}</strong>
+                         <p>
+  {result.result === 'SECURE'
+    ? 'Resolver returned a validated answer.'
+    : result.result === 'BOGUS'
+      ? 'Resolver rejected the invalid DNSSEC response.'
+      : result.result === 'INSECURE'
+        ? 'The resolver did not mark this response as DNSSEC-authenticated (AD absent).'
+        : 'The request did not complete successfully.'}
+</p>
+                        </span>
+                        <Pill kind={result.mode === 'offline' ? 'warning' : 'teal'}>
+                          {result.mode === 'offline' ? 'Offline' : 'API response'}
+                        </Pill>
+                      </div>
+
+                      <div className="result-details">
+                        <span>Domain<b>{result.domain}</b></span>
+                        <span>DNS response code<b>{result.rcode || 'Unknown'}</b></span>
+                        <span>AD flag<b>{result.ad ? 'Present' : 'Absent'}</b></span>
+                        <span>Latency<b>{result.latency == null ? '—' : `${result.latency} ms`}</b></span>
+                        <span>Answer<b>{result.answer || 'No answer returned'}</b></span>
+                        <span>Source<b>{result.source || result.mode}</b></span>
+                        <span>Run time<b>{result.ranAt}</b></span>
+                      </div>
+
+                      <div className="warning-line">
+                        {result.mode === 'offline'
+                          ? <AlertTriangle size={15} />
+                          : <CheckCircle2 size={15} />}
+                        {result.apiMessage}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <section className="panel matrix">
+                <div className="panel-head">
+                  <div>
+                    <h3>Test matrix</h3>
+                    <p>Project scenarios and expected resolver behavior</p>
+                  </div>
+                </div>
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>SCENARIO</th>
+                        <th>TEST DOMAIN</th>
+                        <th>EXPECTED RCODE</th>
+                        <th>AD FLAG</th>
+                        <th>CLASSIFICATION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {TESTS.map(t => (
+                        <tr key={t.domain}>
+                          <td>{t.label}</td>
+                          <td><code>{t.domain}</code></td>
+                          <td>{t.result === 'BOGUS' ? 'SERVFAIL' : 'NOERROR'}</td>
+                          <td>{t.result === 'SECURE' ? 'Present' : 'Absent'}</td>
+                          <td><Pill kind={t.result.toLowerCase()}>{t.result}</Pill></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          )}
+
+          {page === 'Query Explorer' && (
+            <>
+              <Head
+                eyebrow="QUERY INSPECTION"
+                title={<>Query <em>Explorer</em></>}
+                subtitle="Inspect DNS answers and DNSSEC classification details returned by the API."
+                action={
+                  <button className="btn secondary" onClick={exportCsv}>
+                    <Download size={15} /> Export CSV
+                  </button>
+                }
+              />
+
+              <div className="metrics compact">
+                <Metric
+                  icon={Search}
+                  label="Displayed records"
+                  value={filtered.length}
+                  note="Filtered API records"
+                />
+                <Metric
+                  icon={ShieldCheck}
+                  label="Secure records"
+                  value={filtered.filter(q => q.result === 'SECURE').length}
+                  note="AD present"
+                  kind="green"
+                />
+                <Metric
+                  icon={AlertTriangle}
+                  label="Bogus records"
+                  value={filtered.filter(q => q.result === 'BOGUS').length}
+                  note="SERVFAIL"
+                  kind="red"
+                />
+                <Metric
+                  icon={Clock3}
+                  label="Mean query latency"
+                  value={
+                    filtered.some(q => q.latency != null)
+                      ? `${Math.round(
+                          filtered
+                            .filter(q => q.latency != null)
+                            .reduce((sum, q) => sum + q.latency, 0) /
+                          filtered.filter(q => q.latency != null).length
+                        )} ms`
+                      : '—'
+                  }
+                  note="Measured API latency"
+                  kind="purple"
+                />
+              </div>
+
+              <section className="panel explorer">
+                <div className="toolbar">
+                  <div className="search">
+                    <Search size={16} />
+                    <input
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      placeholder="Search domain, response code..."
+                    />
+                    <button onClick={() => setSearch('')}>
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div className="filters">
+                    {['ALL', 'SECURE', 'INSECURE', 'BOGUS'].map(f => (
+                      <button
+                        className={filter === f ? 'selected' : ''}
+                        onClick={() => setFilter(f)}
+                        key={f}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <QueryTable rows={filtered} full />
+
+                <div className="table-foot">
+                  <span>Showing {filtered.length} matching API records</span>
+                  <span>Results loaded from the backend</span>
+                </div>
+              </section>
+
+              <div className="notice">
+                <ShieldCheck />
+                <div>
+                  <b>About the AD flag</b>
+                  <p>
+                    The Authenticated Data (AD) flag indicates that the validating
+                    resolver considers the answer authenticated. In this dashboard,
+                    the displayed values come from the resolver API responses.
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {page === 'System Architecture' && (
+            <>
+              <Head
+                eyebrow="SYSTEM DESIGN"
+                title={<>System <em>Architecture</em></>}
+                subtitle="Reference flow for the gateway-assisted DNSSEC project."
+                action={<Pill kind="warning">Integration pending</Pill>}
+              />
+
+              <div className="notice">
+                <Network />
+                <div>
+                  <b>Architecture view, not live network discovery</b>
+                  <p>
+                    This diagram represents the intended design. Backend-to-Unbound
+                    testing is separate from verification of the ESP8266 DoT connection.
+                  </p>
+                </div>
+              </div>
+
+              <section className="panel architecture">
+                <div className="panel-head">
+                  <div>
+                    <h3>Resolution and validation path</h3>
+                    <p>Conceptual system flow · PS-004</p>
+                  </div>
+                  <Pill>REFERENCE</Pill>
+                </div>
+
+                <div className="architecture-flow">
+                  {[
+                    {
+                      n: '01',
+                      name: 'ESP8266 client',
+                      icon: Cpu,
+                      desc: 'Builds DNS queries and requests resolution over DNS-over-TLS.'
+                    },
+                    {
+                      n: '02',
+                      name: 'TLS transport',
+                      icon: LockKeyhole,
+                      desc: 'DoT uses TLS over TCP port 853 to protect client-to-gateway DNS transport.'
+                    },
+                    {
+                      n: '03',
+                      name: 'Unbound resolver',
+                      icon: Server,
+                      desc: 'Performs recursive DNS resolution and DNSSEC validation.'
+                    },
+                    {
+                      n: '04',
+                      name: 'NSD test zones',
+                      icon: Globe2,
+                      desc: 'Hosts controlled SECURE, INSECURE, and BOGUS zones; NSD is authoritative, not the gateway.'
+                    }
+                  ].map((s, i) => (
+                    <React.Fragment key={s.n}>
+                      <article>
+                        <div className={`arch-icon c${i}`}><s.icon size={25} /></div>
+                        <small>COMPONENT {s.n}</small>
+                        <h3>{s.name}</h3>
+                        <p>{s.desc}</p>
+                      </article>
+                      {i < 3 && (
+                        <div className="arrow">
+                          <small>
+                            {['DNS over TLS · 853', 'Recursive query', 'DNSSEC validation'][i]}
+                          </small>
+                          <b>→</b>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
+
+             <div>
+                <span>DoT · TCP/853</span>
+             </div>
+              </section>
+
+              <div className="grid lower">
+                <section className="panel text-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Security boundaries</h3>
+                      <p>Layer responsibilities</p>
+                    </div>
+                    <Fingerprint />
+                  </div>
+                  <div className="bullet">
+                    <LockKeyhole />
+                    <span>
+                      <b>Transport confidentiality</b>
+                      <small>
+                        TLS protects DNS traffic in transit between the client and gateway.
+                      </small>
+                    </span>
+                  </div>
+                  <div className="bullet">
+                    <Fingerprint />
+                    <span>
+                      <b>Gateway authentication</b>
+                      <small>
+                        Public-key pinning and HMAC challenge-response are design
+                        elements; runtime success is not asserted.
+                      </small>
+                    </span>
+                  </div>
+                  <div className="bullet">
+                    <ShieldCheck />
+                    <span>
+                      <b>DNSSEC validation</b>
+                      <small>
+                        Unbound distinguishes secure, insecure, and bogus responses.
+                      </small>
+                    </span>
+                  </div>
+                </section>
+
+                <section className="panel text-panel">
+                  <div className="panel-head">
+                    <div>
+                      <h3>Integration checklist</h3>
+                      <p>Remaining verification steps</p>
+                    </div>
+                  </div>
+                  {[
+                    'Backend health and query endpoints are reachable.',
+                    'Actual resolver results are returned through the backend.',
+                    'Dashboard query rows display API response fields.',
+                    'Verify ESP8266-to-gateway DNS-over-TLS on TCP port 853.'
+                  ].map(t => (
+                    <div className="check-row" key={t}><i />{t}</div>
+                  ))}
+                </section>
+              </div>
+            </>
+          )}
+
+          {page === 'Event Logs' && (
+            <>
+              <Head
+                eyebrow="AUDIT TRAIL"
+                title={<>Event <em>Logs</em></>}
+                subtitle="Local UI events and recent resolver query outcomes."
+                action={<Pill kind="warning">Partial logging</Pill>}
+              />
+
+              <div className="notice">
+                <AlertTriangle />
+                <div>
+                  <b>These are not device logs</b>
+                  <p>
+                    The events below are generated by the dashboard and recent API
+                    responses. They are not retrieved from the ESP8266 or system journal.
+                  </p>
+                </div>
+              </div>
+
+              <section className="panel logs">
+                <div className="panel-head">
+                  <div>
+                    <h3>Event timeline</h3>
+                    <p>Dashboard session and API query records</p>
+                  </div>
+                  <Pill>LOCAL VIEW</Pill>
+                </div>
+
+                {[
+                  {
+                    level: apiStatus === 'connected' ? 'INFO' : 'WARN',
+                    title: apiStatus === 'connected'
+                      ? 'Backend API reachable'
+                      : 'Backend API unavailable',
+                    desc: apiStatus === 'connected'
+                      ? 'The dashboard connected to the Express backend.'
+                      : 'The dashboard could not retrieve results from the backend.',
+                    time: lastUpdated
+                      ? lastUpdated.toLocaleTimeString()
+                      : new Date().toLocaleTimeString()
+                  },
+                  ...queries.slice(0, 5).map(q => ({
+                    level: q.result === 'BOGUS' ? 'WARN' : 'INFO',
+                    title: `Resolver query · ${q.domain}`,
+                    desc: `Response ${q.rcode}; AD flag ${q.ad ? 'present' : 'absent'}; classification ${q.result}; answer ${q.answer || 'none'}.`,
+                    time: q.time
+                  }))
+                ].map((e, i) => (
+                  <div className="event" key={`${e.title}-${i}`}>
+                    <div className={e.level === 'WARN' ? 'warn' : ''}>
+                      {e.level === 'WARN' ? <AlertTriangle /> : <FileText />}
+                    </div>
+                    <span>
+                      <b>{e.title}</b>
+                      <p>{e.desc}</p>
+                      <small><Clock3 size={12} /> {e.time}</small>
+                    </span>
+                    <Pill kind={e.level === 'WARN' ? 'warning' : 'teal'}>
+                      {e.level}
+                    </Pill>
+                  </div>
+                ))}
+              </section>
+            </>
+          )}
+
+          <footer>
+            <span>DNSGuard <b>v0.1.0</b> · AIORI-3 / PS-004</span>
+            <span>
+              <i /> {apiStatus === 'connected'
+                ? 'Backend connected · ESP8266 DoT pending'
+                : 'Backend offline · check local API'}
+            </span>
+          </footer>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function QueryTable({ rows, full = false }) {
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>DOMAIN</th>
+            {full && <th>TYPE</th>}
+            <th>RESPONSE</th>
+            <th>AD FLAG</th>
+            <th>CLASSIFICATION</th>
+            <th>LATENCY</th>
+            <th>TIME</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {rows.map(q => (
+            <tr key={q.id}>
+              <td>
+                <span className="domain">
+                  <Globe2 size={14} />
+                  <b>{q.domain}</b>
+                </span>
+              </td>
+
+              {full && <td><code>{q.type}</code></td>}
+
+              <td>
+                <code className={q.rcode === 'SERVFAIL' ? 'fail' : ''}>
+                  {q.rcode}
+                </code>
+              </td>
+
+              <td>
+                <span className={`ad ${q.ad ? 'yes' : 'no'}`}>
+                  {q.ad ? <Check size={12} /> : <X size={12} />}
+                  {q.ad ? 'Present' : 'Absent'}
+                </span>
+              </td>
+
+              <td>
+                <Pill kind={String(q.result).toLowerCase()}>
+                  {q.result}
+                </Pill>
+              </td>
+
+              <td>{q.latency == null ? '—' : `${q.latency} ms`}</td>
+              <td className="time">{q.time}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {!rows.length && (
+        <div className="no-results">No records match these filters.</div>
+      )}
+    </div>
+  );
+}
