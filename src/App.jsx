@@ -11,7 +11,9 @@ import {
   XAxis, YAxis
 } from 'recharts';
 
-const API = 'https://lowest-historical-robbie-capitol.trycloudflare.com/api';
+
+const API = 'https://desktops-taylor-upcoming-gig.trycloudflare.com/api';
+
 const TESTS = [
   {
     domain: 'secure.lab.test',
@@ -132,6 +134,9 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState('checking');
   const [resolverConnected, setResolverConnected] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState('');
   const selectedTest = TESTS.find(t => t.domain === domain);
 
   // Load live DNSSEC query results from the Express backend.
@@ -206,7 +211,31 @@ export default function App() {
       ),
     [queries, filter, search]
   );
+   
+const fetchAuditLogs = async () => {
+  setLogsLoading(true);
+  setLogsError('');
 
+  try {
+    const response = await fetch(`${API}/logs`);
+    const payload = await response.json();
+
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.error || 'Failed to fetch audit logs.');
+    }
+
+    setAuditLogs(payload.data || []);
+  } catch (error) {
+    setLogsError(error.message || 'Could not load audit logs.');
+  } finally {
+    setLogsLoading(false);
+  }
+};
+useEffect(() => {
+  if (page === 'Event Logs') {
+    fetchAuditLogs();
+  }
+}, [page]);
   const runTest = async () => {
     setTesting(true);
     setResult(null);
@@ -231,13 +260,15 @@ export default function App() {
       const q = mapQuery(data, Date.now());
 
       setResult({
-        ...selectedTest,
-        ...q,
-        result: data.status || 'UNKNOWN',
-        ranAt: new Date().toLocaleTimeString(),
-        apiMessage: payload.message || 'Backend response received.',
-        mode: payload.mode || 'unknown'
-      });
+  ...selectedTest,
+  ...q,
+  result: data.status || 'UNKNOWN',
+  ranAt: new Date().toLocaleTimeString(),
+  apiMessage: payload.message || 'Backend response received.',
+  mode: payload.mode || 'unknown',
+  explanation: data.explanation || null,
+  log: payload.log || null
+});
 
       setQueries(previous =>
         [q, ...previous.filter(item => item.domain !== q.domain)].slice(0, 12)
@@ -910,15 +941,32 @@ export default function App() {
                         </Pill>
                       </div>
 
-                      <div className="result-details">
-                        <span>Domain<b>{result.domain}</b></span>
-                        <span>DNS response code<b>{result.rcode || 'Unknown'}</b></span>
-                        <span>AD flag<b>{result.ad ? 'Present' : 'Absent'}</b></span>
-                        <span>Latency<b>{result.latency == null ? '—' : `${result.latency} ms`}</b></span>
-                        <span>Answer<b>{result.answer || 'No answer returned'}</b></span>
-                        <span>Source<b>{result.source || result.mode}</b></span>
-                        <span>Run time<b>{result.ranAt}</b></span>
-                      </div>
+                      
+{result.explanation && (
+  <div className="notice">
+    <ShieldCheck />
+    <div>
+      <b>{result.explanation.title}</b>
+      <p>{result.explanation.explanation}</p>
+
+      {Array.isArray(result.explanation.evidence) &&
+        result.explanation.evidence.length > 0 && (
+          <ul>
+            {result.explanation.evidence.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        )}
+
+      {result.log && (
+        <small>
+          Saved to audit log: {result.log.eventType} ·{" "}
+          {new Date(result.log.timestamp).toLocaleString()}
+        </small>
+      )}
+    </div>
+  </div>
+)}
 
                       <div className="warning-line">
                         {result.mode === 'offline'
@@ -1234,42 +1282,48 @@ export default function App() {
                   <Pill>LOCAL VIEW</Pill>
                 </div>
 
-                {[
-                  {
-                    level: apiStatus === 'connected' ? 'INFO' : 'WARN',
-                    title: apiStatus === 'connected'
-                      ? 'Backend API reachable'
-                      : 'Backend API unavailable',
-                    desc: apiStatus === 'connected'
-                      ? 'The dashboard connected to the Express backend.'
-                      : 'The dashboard could not retrieve results from the backend.',
-                    time: lastUpdated
-                      ? lastUpdated.toLocaleTimeString()
-                      : new Date().toLocaleTimeString()
-                  },
-                  ...queries.slice(0, 5).map(q => ({
-                    level: q.result === 'BOGUS' ? 'WARN' : 'INFO',
-                    title: `Resolver query · ${q.domain}`,
-                    desc: `Response ${q.rcode}; AD flag ${q.ad ? 'present' : 'absent'}; classification ${q.result}; answer ${q.answer || 'none'}.`,
-                    time: q.time
-                  }))
-                ].map((e, i) => (
-                  <div className="event" key={`${e.title}-${i}`}>
-                    <div className={e.level === 'WARN' ? 'warn' : ''}>
-                      {e.level === 'WARN' ? <AlertTriangle /> : <FileText />}
-                    </div>
-                    <span>
-                      <b>{e.title}</b>
-                      <p>{e.desc}</p>
-                      <small><Clock3 size={12} /> {e.time}</small>
-                    </span>
-                    <Pill kind={e.level === 'WARN' ? 'warning' : 'teal'}>
-                      {e.level}
-                    </Pill>
-                  </div>
-                ))}
-              </section>
-            </>
+                
+{logsLoading ? (
+  <p>Loading audit logs...</p>
+) : logsError ? (
+  <p className="warning-line">{logsError}</p>
+) : auditLogs.length === 0 ? (
+  <p>No saved audit logs yet. Run a DNSSEC test to create one.</p>
+) : (
+  auditLogs.map((e, i) => (
+    <div
+      className="event"
+      key={`${e.timestamp}-${e.domain}-${i}`}
+    >
+      <div className={e.status === 'BOGUS' ? 'warn' : ''}>
+        {e.status === 'BOGUS' ? <AlertTriangle /> : <FileText />}
+      </div>
+
+      <span>
+        <b>{e.eventType || 'DNSSEC test'} · {e.domain}</b>
+        <p>
+          Status: {e.status || 'UNKNOWN'}; response: {e.responseCode || 'N/A'};
+          {' '}AD flag: {e.authenticated ? 'present' : 'absent'};
+          {' '}answer: {e.answer || 'none'}.
+        </p>
+        {e.explanation && <p>{e.explanation}</p>}
+        <small>
+          <Clock3 size={12} />{' '}
+          {e.timestamp
+            ? new Date(e.timestamp).toLocaleString()
+            : 'Time unavailable'}
+        </small>
+      </span>
+
+      <Pill kind={e.status === 'BOGUS' ? 'warning' : 'teal'}>
+        {e.status || 'UNKNOWN'}
+      </Pill>
+    </div>
+  ))
+)}
+</section>
+</>
+
           )}
 
           <footer>

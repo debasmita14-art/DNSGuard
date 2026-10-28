@@ -3,8 +3,12 @@ const express = require("express");
 const cors = require("cors");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
+const rateLimit = require("express-rate-limit");
+const fs = require("fs/promises");
+const path = require("path");;
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = 3001;
 const execFileAsync = promisify(execFile);
 
@@ -24,9 +28,107 @@ const dnsTests = [
   },
 ];
 
-app.use(cors());
-app.use(express.json());
+// Persistent audit log file
+const LOG_FILE = path.join(__dirname, "dns-logs.jsonl");
 
+// Explain DNSSEC results using the resolver's observed evidence.
+function explainResult(data) {
+  if (data.status === "SECURE") {
+    return {
+      title: "DNSSEC validation successful",
+      explanation:
+        "The resolver returned NOERROR and the AD flag, indicating that it validated the DNS data using DNSSEC.",
+      evidence: [
+        "Response code: NOERROR",
+        "Authenticated Data (AD): present",
+      ],
+    };
+  }
+
+  if (data.status === "INSECURE") {
+    return {
+      title: "DNS response is not DNSSEC-authenticated",
+      explanation:
+        "The resolver returned NOERROR without the AD flag. This is consistent with an unsigned or otherwise non-authenticated DNS response; it does not by itself indicate an attack.",
+      evidence: [
+        "Response code: NOERROR",
+        "Authenticated Data (AD): absent",
+      ],
+    };
+  }
+
+  if (data.status === "BOGUS") {
+    return {
+      title: "DNSSEC validation failed",
+      explanation:
+        "The resolver returned SERVFAIL with evidence of a DNSSEC validation failure. Possible causes include invalid or expired signatures, incorrect DNSSEC configuration, or tampering. Further investigation is needed to determine the cause.",
+      evidence: [
+        "Response code: SERVFAIL",
+        "DNSSEC validation failure detected",
+      ],
+    };
+  }
+
+  return {
+    title: "DNS result could not be classified",
+    explanation:
+      "The available resolver response did not provide enough evidence to classify this result as secure, insecure, or DNSSEC-bogus. Check resolver connectivity and diagnostic output.",
+    evidence: [
+      `Response code: ${data.result || "Unavailable"}`,
+      "Classification requires further investigation",
+    ],
+  };
+}
+
+// Append one actual test event as a JSON Lines record.
+async function writeTestLog(data, eventType = "DNSSEC_TEST") {
+  const explanation = explainResult(data);
+
+  const entry = {
+    timestamp: new Date().toISOString(),
+    eventType,
+    domain: data.domain,
+    status: data.status,
+    responseCode: data.result,
+    authenticated: data.authenticated,
+    answer: data.answer,
+    latencyMs: data.queryTimeMs,
+    flags: data.flags,
+    explanation: explanation.explanation,
+    evidence: explanation.evidence,
+  };
+
+  await fs.appendFile(
+    LOG_FILE,
+    JSON.stringify(entry) + "\n",
+    "utf8"
+  );
+
+  return entry;
+}
+
+app.use(
+  cors({
+    origin: "https://dns-guard-pink.vercel.app",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
+app.use(express.json({ limit: "10kb" }));
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: "Too many requests. Please wait a minute and try again.",
+  },
+});
+
+app.use("/api", apiLimiter);
 /**
  * Run a real DNSSEC query through Unbound in WSL.
  * Arguments are passed separately; user input is never
@@ -119,6 +221,7 @@ async function queryResolver(domain) {
 }
 
 // 1. Health check
+// 1. Health check
 app.get("/api/health", async (req, res) => {
   try {
     await queryResolver("secure.lab.test");
@@ -141,7 +244,6 @@ app.get("/api/health", async (req, res) => {
     });
   }
 });
-
 // 2. Run all three real DNSSEC test cases
 app.get("/api/queries", async (req, res) => {
   try {
@@ -165,7 +267,42 @@ app.get("/api/queries", async (req, res) => {
   }
 });
 
-// 3. Run a real DNSSEC test for an allowlisted domain
+// 3. Retrieve saved DNSSEC test logs
+app.get("/api/logs", async (req, res) => {
+  try {
+    const contents = await fs.readFile(LOG_FILE, "utf8");
+
+    const logs = contents
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line))
+      .reverse()
+      .slice(0, 100);
+
+    res.json({
+      success: true,
+      count: logs.length,
+      data: logs,
+    });
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return res.json({
+        success: true,
+        count: 0,
+        data: [],
+      });
+    }
+
+    console.error("Could not read DNSSEC logs:", error.message);
+
+    res.status(500).json({
+      success: false,
+      error: "Could not retrieve DNSSEC logs.",
+    });
+  }
+});
+
+// 4. Run a real DNSSEC test for an allowlisted domain
 app.post("/api/dnssec/test", async (req, res) => {
   const domain =
     typeof req.body?.domain === "string"
@@ -179,39 +316,41 @@ app.post("/api/dnssec/test", async (req, res) => {
     });
   }
 
-  const isLabDomain = dnsTests.some((test) => test.domain === domain);
+  const allowedDomains = [
+    ...dnsTests.map((test) => test.domain),
+    "example.com",
+  ];
 
-// Keep the three controlled lab scenarios available.
-const isValidDomain =
-  domain.length <= 253 &&
-  domain.endsWith(".") === false &&
-  domain.split(".").length >= 2 &&
-  domain.split(".").every(
-    (label) =>
-      label.length >= 1 &&
-      label.length <= 63 &&
-      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
-  );
-
-if (!isValidDomain) {
-  return res.status(400).json({
-    success: false,
-    error: "Enter a valid domain name, such as example.com.",
-    availableDomains: dnsTests.map((test) => test.domain),
-  });
-}
+  if (!allowedDomains.includes(domain)) {
+    return res.status(403).json({
+      success: false,
+      error: "This domain is not enabled for the public demo.",
+      availableDomains: allowedDomains,
+    });
+  }
 
   try {
     const data = await queryResolver(domain);
+    const explanation = explainResult(data);
+    const logEntry = await writeTestLog(data, "MANUAL_DNSSEC_TEST");
 
     res.json({
       success: true,
       mode: "live",
       resolverConnected: true,
       message: "Result obtained from the Unbound resolver.",
-      data,
+      data: {
+        ...data,
+        explanation,
+      },
+      log: {
+        timestamp: logEntry.timestamp,
+        eventType: logEntry.eventType,
+      },
     });
   } catch (error) {
+    console.error("DNSSEC test failed:", error.message);
+
     res.status(503).json({
       success: false,
       mode: "unavailable",
@@ -220,7 +359,6 @@ if (!isValidDomain) {
     });
   }
 });
-
 // Start server
 app.listen(PORT, () => {
   console.log(`DNSGuard API running at http://localhost:${PORT}`);
