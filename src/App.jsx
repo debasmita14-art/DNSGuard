@@ -13,7 +13,7 @@ import {
 
 
 
-const API = 'https://industries-hindu-barely-frequency.trycloudflare.com/api';
+const API = 'https://syndication-liz-planner-gold.trycloudflare.com/api';
 
 
 const TESTS = [
