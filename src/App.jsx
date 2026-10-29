@@ -130,6 +130,10 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('ALL');
   const [domain, setDomain] = useState(TESTS[0].domain);
+  const [gatewayScenario, setGatewayScenario] = useState('rogueMac');
+  const [gatewayResult, setGatewayResult] = useState(null);
+  const [gatewayLoading, setGatewayLoading] = useState(false);
+  const [gatewayError, setGatewayError] = useState('');
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState(null);
   const [refresh, setRefresh] = useState(0);
@@ -293,6 +297,7 @@ useEffect(() => {
         body: JSON.stringify({ domain })
       });
 
+
       const payload = await response.json();
 
       if (!response.ok || !payload.success) {
@@ -335,6 +340,34 @@ useEffect(() => {
       setTesting(false);
     }
   };
+
+  const runGatewaySimulation = async () => {
+  setGatewayLoading(true);
+  setGatewayError('');
+  setGatewayResult(null);
+
+  try {
+    const response = await fetch(`${API}/gateway/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario: gatewayScenario }),
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.error || 'Gateway simulation failed.');
+    }
+
+    setGatewayResult(payload);
+  } catch (error) {
+    setGatewayError(
+      error.message || 'Could not reach the DNSGuard backend.'
+    );
+  } finally {
+    setGatewayLoading(false);
+  }
+};
 
   const exportCsv = () => {
     const rows = [
@@ -676,7 +709,77 @@ useEffect(() => {
                 )}
               </section>
 
-      
+      <div className="panel gateway-simulation-panel">
+  <div className="panel-header">
+    <div>
+      <h3>Rogue Gateway Simulation</h3>
+      <p>Compare a simulated gateway against a trusted baseline.</p>
+    </div>
+    <span className="status-badge">SIMULATION</span>
+  </div>
+
+  <div className="gateway-sim-controls">
+    <label htmlFor="gateway-scenario">Test scenario</label>
+
+    <select
+      id="gateway-scenario"
+      value={gatewayScenario}
+      onChange={(e) => {
+        setGatewayScenario(e.target.value);
+        setGatewayResult(null);
+        setGatewayError('');
+      }}
+    >
+      <option value="trusted">Trusted gateway — baseline match</option>
+      <option value="rogueMac">Fake gateway — MAC mismatch</option>
+      <option value="rogueIp">Fake gateway — IP mismatch</option>
+    </select>
+
+    <button
+      type="button"
+      onClick={runGatewaySimulation}
+      disabled={gatewayLoading}
+    >
+      {gatewayLoading ? 'Testing...' : 'Run Gateway Test'}
+    </button>
+  </div>
+
+  {gatewayError && (
+    <p role="alert" className="error-message">{gatewayError}</p>
+  )}
+
+  {gatewayResult && (
+    <div className="gateway-sim-result">
+      <h4>
+        {gatewayResult.matched
+          ? '✓ GATEWAY MATCH'
+          : '⚠ ROGUE GATEWAY SUSPECTED'}
+      </h4>
+
+      <p>{gatewayResult.explanation}</p>
+
+      <div className="gateway-comparison">
+        <div>
+          <strong>Trusted baseline</strong>
+          <p>IP: {gatewayResult.trusted.ip}</p>
+          <p>MAC: {gatewayResult.trusted.mac}</p>
+        </div>
+
+        <div>
+          <strong>Simulated gateway</strong>
+          <p>IP: {gatewayResult.observed.ip}</p>
+          <p>MAC: {gatewayResult.observed.mac}</p>
+        </div>
+      </div>
+
+      <small>{gatewayResult.notice}</small>
+    </div>
+  )}
+
+  {!gatewayResult && !gatewayError && (
+    <p>Select a scenario and click Run Gateway Test.</p>
+  )}
+</div>
               <div className="grid chart-grid">
                 <section className="panel">
                   <div className="panel-head">
@@ -963,7 +1066,6 @@ useEffect(() => {
     }`}
   >
 
-  >
     {selectedTest?.result === 'BOGUS'
       ? <ShieldAlert />
       : selectedTest?.result === 'SECURE'

@@ -332,6 +332,58 @@ app.get("/api/logs", async (req, res) => {
 
 // 4. Run a real DNSSEC test for an allowlisted domain
 app.post("/api/dnssec/test", async (req, res) => {
+// Rogue Gateway Simulation — demonstration only; does not inspect the real network.
+app.post("/api/gateway/simulate", (req, res) => {
+  const trusted = {
+    ip: "192.168.1.1",
+    mac: "AA:BB:CC:DD:EE:01",
+  };
+
+  const scenarios = {
+    trusted: {
+      ip: "192.168.1.1",
+      mac: "AA:BB:CC:DD:EE:01",
+    },
+    rogueMac: {
+      ip: "192.168.1.1",
+      mac: "AA:BB:CC:DD:EE:99",
+    },
+    rogueIp: {
+      ip: "192.168.1.99",
+      mac: "AA:BB:CC:DD:EE:01",
+    },
+  };
+
+  const scenario =
+    typeof req.body?.scenario === "string"
+      ? req.body.scenario
+      : "rogueMac";
+
+  if (!Object.prototype.hasOwnProperty.call(scenarios, scenario)) {
+    return res.status(400).json({
+      success: false,
+      error: "Choose trusted, rogueMac, or rogueIp.",
+    });
+  }
+
+  const observed = scenarios[scenario];
+  const matched =
+    observed.ip === trusted.ip && observed.mac === trusted.mac;
+
+  res.json({
+    success: true,
+    mode: "SIMULATION",
+    trusted,
+    observed,
+    status: matched ? "GATEWAY MATCH" : "ROGUE GATEWAY SUSPECTED",
+    matched,
+    explanation: matched
+      ? "The simulated gateway matches the trusted baseline."
+      : "The simulated gateway differs from the trusted baseline.",
+    notice: "Simulated comparison only; no live network attack was detected.",
+    timestamp: new Date().toISOString(),
+  });
+});
   const domain =
     typeof req.body?.domain === "string"
       ? req.body.domain.trim().toLowerCase()
@@ -344,16 +396,17 @@ app.post("/api/dnssec/test", async (req, res) => {
     });
   }
 
-  const allowedDomains = [
-    ...dnsTests.map((test) => test.domain),
-    "example.com",
-  ];
-
-  if (!allowedDomains.includes(domain)) {
-    return res.status(403).json({
+    // Allow valid DNS names while keeping shell execution safe.
+    const domainPattern =
+    /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+  if (
+    !domainPattern.test(domain) ||
+    !domain.includes(".") ||
+    domain.split(".").some((label) => label.length > 63)
+  ) {
+    return res.status(400).json({
       success: false,
-      error: "This domain is not enabled for the public demo.",
-      availableDomains: allowedDomains,
+      error: "Please enter a valid domain name, such as example.com.",
     });
   }
 
