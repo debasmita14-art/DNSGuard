@@ -136,6 +136,8 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState('checking');
   const [resolverConnected, setResolverConnected] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [systemMetrics, setSystemMetrics] = useState(null);
+  const [metricsError, setMetricsError] = useState('');
   const [auditLogs, setAuditLogs] = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState('');
@@ -193,6 +195,45 @@ export default function App() {
       clearInterval(timer);
     };
   }, [refresh]);
+ 
+  
+  // Refresh gateway and benchmark metrics from WSL.
+  useEffect(() => {
+    let active = true;
+
+    const loadMetrics = async () => {
+      try {
+        const response = await fetch(`${API}/metrics`);
+
+        if (!response.ok) {
+          throw new Error('Metrics API unavailable');
+        }
+
+        const payload = await response.json();
+
+        if (!payload.success) {
+          throw new Error('Metrics request failed');
+        }
+
+        if (active) {
+          setSystemMetrics(payload.data);
+          setMetricsError('');
+        }
+      } catch (error) {
+        if (active) {
+          setMetricsError(error.message);
+        }
+      }
+    };
+
+    loadMetrics();
+    const timer = setInterval(loadMetrics, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   const nav = [
     ['Overview', LayoutDashboard],
@@ -541,6 +582,101 @@ useEffect(() => {
                 />
               </div>
 
+              <section className="panel" style={{ marginBottom: 20 }}>
+                <div className="panel-head">
+                  <div>
+                    <h3>Gateway &amp; Benchmark Metrics</h3>
+                    <p>Metrics received from the WSL monitoring API</p>
+                  </div>
+                  <Pill kind={systemMetrics?.gateway?.running ? 'teal' : 'warning'}>
+                    {metricsError
+                      ? 'METRICS UNAVAILABLE'
+                      : systemMetrics
+                        ? systemMetrics.gateway?.running
+                          ? 'GATEWAY RUNNING'
+                          : 'GATEWAY STOPPED'
+                        : 'LOADING METRICS'}
+                  </Pill>
+                </div>
+
+                {systemMetrics ? (
+                  <>
+                    <div className="metrics">
+                      <Metric
+                        icon={Cpu}
+                        label="Gateway CPU"
+                        value={systemMetrics.process?.available
+                          ? `${Number(systemMetrics.process.cpu_percent).toFixed(1)}%`
+                          : 'N/A'}
+                        note="Unbound process"
+                        kind="purple"
+                      />
+                      <Metric
+                        icon={Activity}
+                        label="Gateway memory"
+                        value={systemMetrics.process?.available
+                          ? `${Number(systemMetrics.process.memory_mb).toFixed(1)} MB`
+                          : 'N/A'}
+                        note="Process memory"
+                        kind="teal"
+                      />
+                      <Metric
+                        icon={Network}
+                        label="Gateway port"
+                        value={systemMetrics.gateway?.port ?? 'N/A'}
+                        note={`PID ${systemMetrics.gateway?.pid ?? 'N/A'}`}
+                        kind="green"
+                      />
+                      <Metric
+                        icon={Clock3}
+                        label="Metrics updated"
+                        value={systemMetrics.updated_at
+                          ? new Date(systemMetrics.updated_at).toLocaleTimeString()
+                          : 'N/A'}
+                        note="Latest API snapshot"
+                        kind="purple"
+                      />
+                    </div>
+
+                    <div className="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>DNS test</th>
+                            <th>Runs</th>
+                            <th>Successful</th>
+                            <th>SERVFAIL</th>
+                            <th>Average latency</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(systemMetrics.benchmarks || {}).map(
+                            ([name, benchmark]) => (
+                              <tr key={name}>
+                                <td>{name}</td>
+                                <td>{benchmark.runs ?? '—'}</td>
+                                <td>{benchmark.success ?? '—'}</td>
+                                <td>{benchmark.servfail ?? '—'}</td>
+                                <td>
+                                  {benchmark.average_latency_ms != null
+                                    ? `${benchmark.average_latency_ms} ms`
+                                    : '—'}
+                                </td>
+                              </tr>
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : (
+                  <p>
+                    {metricsError || 'Waiting for the WSL metrics API…'}
+                  </p>
+                )}
+              </section>
+
+      
               <div className="grid chart-grid">
                 <section className="panel">
                   <div className="panel-head">

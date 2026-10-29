@@ -119,7 +119,7 @@ app.use(express.json({ limit: "10kb" }));
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 20,
+  limit: 120,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: {
@@ -220,7 +220,35 @@ async function queryResolver(domain) {
   };
 }
 
+ // WSL metrics bridge
+app.get("/api/metrics", async (req, res) => {
+  try {
+    const response = await fetch("http://localhost:8000/api/metrics");
+
+    if (!response.ok) {
+      return res.status(502).json({
+        success: false,
+        message: `WSL metrics service returned ${response.status}`,
+      });
+    }
+
+    const metrics = await response.json();
+    res.json({
+      success: true,
+      mode: "live",
+      data: metrics,
+    });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      message: "WSL metrics service is unavailable. Check that the metrics server is running.",
+    });
+  }
+});
+
 // 1. Health check
+
+
 // 1. Health check
 app.get("/api/health", async (req, res) => {
   try {
