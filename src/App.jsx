@@ -12,7 +12,9 @@ import {
 } from 'recharts';
 
 
-const API = 'https://desktops-taylor-upcoming-gig.trycloudflare.com/api';
+
+const API = 'https://industries-hindu-barely-frequency.trycloudflare.com/api';
+
 
 const TESTS = [
   {
